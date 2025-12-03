@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tasse Sbriciolate</title>
+    <!-- Caricamento di Tailwind CSS per uno stile moderno e responsivo -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Stile personalizzato per la formattazione numerica italiana */
+        .input-group input[type="number"] {
+            /* Nasconde le frecce di incremento/decremento su input number */
+            -moz-appearance: textfield;
+        }
+        .input-group input[type="number"]::-webkit-outer-spin-button,
+        .input-group input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+    </style>
+    <script>
+        // Funzione per formattare i numeri in valuta Euro
+        function formatCurrency(amount) {
+            // Internamente usiamo il punto, per la visualizzazione usiamo la virgola come separatore decimale
+            if (typeof amount !== 'number' || isNaN(amount)) return '€ 0,00';
+            return '€ ' + amount.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        }
+
+        // Tassi Fissi (Questi possono essere modificati se i tassi cambiano o se hai tassi specifici)
+        const TAX_RATE = 0.05; // Imposta Sostitutiva (5%)
+        // Tasso INPS Gestione Separata (senza cassa)
+        const INPS_RATE = 0.2623;
+        // Deduzione ENPALS/Agibilità (9.19% menzionato nel tuo foglio)
+        const AGIBILITA_DEDUCTION = 0.0919;
+
+        // Coefficienti ATECO
+        const COEFFICIENTS = {
+            'ateco67': 0.67, // Spettacoli
+            'ateco78': 0.78, // Altro
+            'agibilita': 1.0 // Per il calcolo di Agibilità, il coefficiente base è 1, ma si applica la deduzione
+        };
+
+        // Funzione centrale di calcolo
+        function calculateTaxes(gross, coefficientKey) {
+            const C = COEFFICIENTS[coefficientKey];
+            let taxableBase, inps, flatTax;
+            let net, remainingAfterTaxes;
+
+            if (coefficientKey === 'agibilita') {
+                // SCENARIO 3: Fatture Con Agibilità (con deduzione 9.19% dal lordo)
+                const enpalsDeduction = gross * AGIBILITA_DEDUCTION;
+                taxableBase = gross - enpalsDeduction;
+                flatTax = taxableBase * TAX_RATE;
+                inps = 0; // Se è Agibilità, si assume che ENPALS sostituisca INPS in questa simulazione semplificata
+                net = taxableBase - flatTax; // Lordo - Deduzione ENPALS - Flat Tax
+                remainingAfterTaxes = net;
+                
+                return {
+                    gross,
+                    taxableBase,
+                    flatTax,
+                    inps: enpalsDeduction, // Usiamo l'INPS/Empals per mostrare la deduzione
+                    net,
+                    remainingAfterTaxes
+                };
+
+            } else {
+                // SCENARI 1 & 2: Regime Forfettario Standard (67% / 78%)
+                taxableBase = gross * C;
+                flatTax = taxableBase * TAX_RATE;
+                inps = taxableBase * INPS_RATE;
+                net = gross - flatTax - inps;
+                remainingAfterTaxes = net;
+
+                return {
+                    gross,
+                    taxableBase,
+                    flatTax,
+                    inps,
+                    net,
+                    remainingAfterTaxes
+                };
+            }
+        }
+
+        // Funzione per il calcolo inverso (Netto a Lordo)
+        function calculateGrossFromNet(net, coefficientKey) {
+            const C = COEFFICIENTS[coefficientKey];
+
+            if (coefficientKey === 'agibilita') {
+                // SCENARIO 3 (Agibilità): N = L * (1 - 0.0919) - (L * (1 - 0.0919) * 0.05)
+                // N = L * (1 - 0.0919) * (1 - 0.05)
+                const reverseFactor = (1 - AGIBILITA_DEDUCTION) * (1 - TAX_RATE);
+                return net / reverseFactor;
+            } else {
+                // SCENARI 1 & 2 (Forfettario Standard): N = L * [1 - C * (T_5% + T_INPS)]
+                const taxAndContribRate = C * (TAX_RATE + INPS_RATE);
+                const reverseFactor = 1 - taxAndContribRate;
+                return net / reverseFactor;
+            }
+        }
+
+        // Funzione per aggiornare l'interfaccia utente
+        function updateUI(inputEvent) {
+            const scenario = document.getElementById('scenarioSelect').value;
+            const netInput = document.getElementById('netInput').value.replace(',', '.');
+            const grossInput = document.getElementById('grossInput').value.replace(',', '.');
+
+            const resultsNetToGross = document.getElementById('resultsNetToGross');
+            const resultsGrossToNet = document.getElementById('resultsGrossToNet');
+            const calculatedGross = document.getElementById('calculatedGross');
+            const finalNet = document.getElementById('finalNet');
+
+            // Reset outputs
+            calculatedGross.textContent = formatCurrency(0);
+            finalNet.textContent = formatCurrency(0);
+            resultsGrossToNet.innerHTML = '';
+
+
+            // 1. Calcolo Lordo da Netto (Reverse)
+            const netAmount = parseFloat(netInput);
+            if (netAmount > 0) {
+                const gross = calculateGrossFromNet(netAmount, scenario);
+                calculatedGross.textContent = formatCurrency(gross);
+
+                // Calcola i dettagli di riepilogo per il Gross appena trovato
+                const details = calculateTaxes(gross, scenario);
+                resultsNetToGross.innerHTML = createDetailTable(details, scenario);
+            } else {
+                resultsNetToGross.innerHTML = '';
+            }
+            
+            // 2. Calcolo Netto da Lordo (Forward)
+            const grossAmount = parseFloat(grossInput);
+            if (grossAmount > 0) {
+                const details = calculateTaxes(grossAmount, scenario);
+                finalNet.textContent = formatCurrency(details.net);
+                resultsGrossToNet.innerHTML = createDetailTable(details, scenario);
+            } else {
+                resultsGrossToNet.innerHTML = '';
+            }
+        }
+
+        // Funzione per creare la tabella dei dettagli dei calcoli
+        function createDetailTable(details, scenario) {
+            let inpsLabel = scenario === 'agibilita' ? 'Deduzione ENPALS/Agibilità (9,19%)' : 'Contributi INPS (26,23% su Imponibile)';
+            let titleLabel = scenario === 'agibilita' ? 'Fatture con Agibilità' : (scenario === 'ateco67' ? 'Fatture ATECO Spettacoli (67%)' : 'Fatture ATECO Altro (78%)');
+
+            return `
+                <div class="space-y-2 mt-4 text-sm">
+                    <h4 class="font-semibold text-base text-indigo-700">${titleLabel} - Dettagli</h4>
+                    <div class="flex justify-between border-b pb-1">
+                        <span>Lordo di Partenza:</span>
+                        <span class="font-medium">${formatCurrency(details.gross)}</span>
+                    </div>
+                    <div class="flex justify-between border-b pb-1">
+                        <span>Totale Imponibile:</span>
+                        <span class="font-medium text-green-700">${formatCurrency(details.taxableBase)}</span>
+                    </div>
+                    <div class="flex justify-between border-b pb-1">
+                        <span>- Imposta Sostitutiva (5% su Imponibile):</span>
+                        <span class="font-medium text-red-600">${formatCurrency(details.flatTax)}</span>
+                    </div>
+                    <div class="flex justify-between border-b pb-1">
+                        <span>- ${inpsLabel}:</span>
+                        <span class="font-medium text-red-600">${formatCurrency(details.inps)}</span>
+                    </div>
+                    <div class="flex justify-between pt-2 border-t-2 border-indigo-300 font-bold text-lg text-gray-800">
+                        <span>Netto Finale (Rimasto):</span>
+                        <span>${formatCurrency(details.net)}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputs = document.querySelectorAll('#netInput, #grossInput, #scenarioSelect');
+            inputs.forEach(input => {
+                input.addEventListener('input', updateUI);
+                input.addEventListener('change', updateUI);
+            });
+
+            // Avvia il calcolo iniziale con valori 0
+            updateUI();
+        });
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 sm:p-8 font-sans">
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-extrabold text-indigo-800 mb-2">Calcolatore Tasse Freelance (Forfettario)</h1>
+            <p class="text-gray-600">Simulazione basata sui coefficienti di redditività del Regime Forfettario e calcoli INPS/ENPALS.</p>
+        </header>
+
+        <main class="space-y-8">
+            <!-- SELETTORE SCENARIO -->
+            <div class="bg-white p-6 rounded-xl shadow-lg">
+                <label for="scenarioSelect" class="block text-lg font-semibold text-gray-700 mb-3">
+                    Seleziona lo Scenario di Calcolo (Coefficiente ATECO)
+                </label>
+                <select id="scenarioSelect" class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out text-lg bg-gray-50">
+                    <option value="ateco67">ATECO Spettacoli (Coefficiente 67%)</option>
+                    <option value="ateco78">ATECO Altro (Coefficiente 78%)</option>
+                    <option value="agibilita">Fatture con Agibilità (Deduzione 9,19% dal Lordo)</option>
+                </select>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                
+                <!-- BLOCCO 1: CALCOLO LORD DA NETTO (Reverse) -->
+                <section class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-indigo-500">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c1.657 0 3 .895 3 2s-1.343 2-3 2h-3v-4h3zM9 12h-3"></path></svg>
+                        Quanto vuoi Netto? (Lordo necessario)
+                    </h2>
+                    
+                    <div class="input-group mb-4">
+                        <label for="netInput" class="block text-sm font-medium text-gray-700 mb-1">
+                            Netto Desiderato (€)
+                        </label>
+                        <input type="number" id="netInput" placeholder="400,00" value="0" min="0" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 text-lg">
+                    </div>
+
+                    <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200">
+                        <p class="text-sm font-medium text-indigo-700 mb-1">
+                            Per ottenere questo netto, devi fatturare:
+                        </p>
+                        <p id="calculatedGross" class="text-3xl font-extrabold text-indigo-600">
+                            € 0,00
+                        </p>
+                        <p class="text-sm text-gray-500 mt-1">
+                            (Questo è il tuo "Lordo" - Totale Fatture)
+                        </p>
+                    </div>
+
+                    <div id="resultsNetToGross">
+                        <!-- Dettagli del calcolo Lordo da Netto verranno inseriti qui -->
+                    </div>
+                </section>
+
+                <!-- BLOCCO 2: CALCOLO NETTO DA LORD (Forward) -->
+                <section class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-emerald-500">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10H8v4h6m-3-2h3"></path></svg>
+                        Quanto è il Lordo? (Netto finale)
+                    </h2>
+
+                    <div class="input-group mb-4">
+                        <label for="grossInput" class="block text-sm font-medium text-gray-700 mb-1">
+                            Lordo Fatturato (€)
+                        </label>
+                        <input type="number" id="grossInput" placeholder="500.44" value="0" min="0" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500 text-lg">
+                    </div>
+                    
+                    <div class="bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+                        <p class="text-sm font-medium text-emerald-700 mb-1">
+                            Rimasto Dopo Tasse (Netto Finale):
+                        </p>
+                        <p id="finalNet" class="text-3xl font-extrabold text-emerald-600">
+                            € 0,00
+                        </p>
+                        <p class="text-sm text-gray-500 mt-1">
+                            (Quanti Soldi Hai Guadagnato)
+                        </p>
+                    </div>
+                    
+                    <div id="resultsGrossToNet">
+                        <!-- Dettagli del calcolo Netto da Lordo verranno inseriti qui -->
+                    </div>
+                </section>
+            </div>
+
+            <!-- DISCLAIMER -->
+            <footer class="text-center text-xs text-gray-500 pt-4 border-t mt-8">
+                <p>
+                    <!-- Avviso legale -->
+                    NOTA BENE: Questa è una simulazione semplificata a scopo informativo basata sui tassi del Regime Forfettario (5%) e Gestione Separata INPS (26.23%).
+                    I calcoli non tengono conto di eventuali contributi fissi INPS, addizionali regionali/comunali, o casistiche specifiche del tuo codice ATECO.
+                    Consulta sempre un commercialista per calcoli fiscali definitivi.
+                </p>
+            </footer>
+        </main>
+    </div>
+</body>
+</html>
